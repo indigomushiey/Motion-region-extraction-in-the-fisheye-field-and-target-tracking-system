@@ -12,9 +12,8 @@ import json
 import numpy as np
 from pathlib import Path
 
-V2_DATA = (Path(__file__).resolve().parents[2] / "fisheyes_v2" /
-           "fisheye_motion_tracking" / "data")
-CALIB_DIR = V2_DATA / "homework2" / "calibration_data"
+DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
+CALIB_DIR = DATA_ROOT / "homework2" / "calibration_data"
 
 _RAY_MAP = None  # (h, w, 3) unit vectors
 

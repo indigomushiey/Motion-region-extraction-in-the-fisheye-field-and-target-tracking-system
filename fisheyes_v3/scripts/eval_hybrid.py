@@ -8,6 +8,7 @@ V2_ROOT = Path(__file__).resolve().parents[2] / "fisheyes_v2" / "fisheye_motion_
 
 sys.path.insert(0, str(PROJECT_ROOT))
 from core.motion_hybrid import detect_motion_hybrid
+from core.tracking import ContourTracker, draw_tracks
 
 def _import_v2(rp, nm):
     fp = V2_ROOT / rp
@@ -22,7 +23,7 @@ compute_metrics = _v2m.compute_metrics
 detect_motion_seed_expand = _v2f.detect_motion_seed_expand
 detect_motion_seed_expand_v12 = _v2f.detect_motion_seed_expand_v12
 
-DATA = V2_ROOT / "data" / "homework2"
+DATA = PROJECT_ROOT / "data" / "homework2"
 GT_DIR = DATA / "motion_annotation" / "GroudTruth"
 CURR_DIR = DATA / "rgb_images"
 PREV_DIR = DATA / "previous_images"
@@ -34,7 +35,7 @@ ALL_FRAMES = ['00000', '00001', '00002', '00003', '00004', '00005',
               '00022', '00026', '00027', '00033', '00037', '00059', '00065']
 
 print("=" * 100)
-print("  MAGNITUDE HFENDING: Center=persp mag, Edge=fish mag")
+print("  HYBRID FLOW: V1 vs V12 vs HF (with target tracking)")
 print("  Methods: V1 | V12 | HF (hybrided)")
 print(f"  Frames: {len(ALL_FRAMES)}")
 print("=" * 100)
@@ -176,6 +177,8 @@ def pl(img, txt, y=22, c=(255,255,255)):
     cv2.putText(img, txt, (6,y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 2)
     cv2.putText(img, txt, (5,y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1)
 
+tracker = ContourTracker(min_area=300, iou_thresh=0.3)
+
 for idx, fid in enumerate(ALL_FRAMES):
     c = cv2.imread(str(CURR_DIR / f"{fid}_FV.png"))
     p = cv2.imread(str(PREV_DIR / f"{fid}_FV_prev.png"))
@@ -187,13 +190,19 @@ for idx, fid in enumerate(ALL_FRAMES):
     mv12 = detect_motion_seed_expand_v12(pg, cg)
     mbl = detect_motion_hybrid(pg, cg)
 
+    # Target tracking on HF mask
+    tracks = tracker.update(mbl, frame_idx=idx)
+    c_tracked = draw_tracks(c, tracks)
+
     s = {m: all_results[m][fid] for m in ["V1","V12","HF"]}
     RH_ = 220; ors = rh(c, RH_)
+    ors_tracked = rh(c_tracked, RH_)  # tracked version
     gts = rh(cv2.cvtColor((gb*255).astype(np.uint8), cv2.COLOR_GRAY2BGR), RH_)
     gov = ors.copy(); gm = cv2.resize((gb*255).astype(np.uint8),(ors.shape[1],ors.shape[0]))
     gov[gm>0] = (gov[gm>0]*0.4+np.array([0,255,0])*0.6).astype(np.uint8)
-    r0 = np.hstack([ors, gts, gov])
+    r0 = np.hstack([ors, ors_tracked, gts, gov])
     pl(r0, f"{fid}  P95={frame_stats[fid]['p95']:.0f}  GT={frame_stats[fid]['gt_px']:,}px")
+    pl(r0[:, ors.shape[1]:], f"Tracking ({len(tracks)} objects)")
 
     ev1, ev12, ebl = rh(ce(mv1,gb), RH_), rh(ce(mv12,gb), RH_), rh(ce(mbl,gb), RH_)
     for e, mn in [(ev1,"V1"),(ev12,"V12"),(ebl,"HF")]:

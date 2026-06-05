@@ -88,20 +88,20 @@ V2 的 V1~V12 已将参数调优空间基本挖掘完毕。核心瓶颈转向**�
               fov_scale=1.0         w(r): 中心→1.0, 边缘→0.0
 ```
 
-- 中心区域（r<0.4）：完全使用透视域 magnitude，Farneback 质量更优
-- 边缘区域（r>0.7）：完全使用鱼眼域 magnitude，避免透视拉伸
-- 过渡带（0.4<r<0.7）：余弦平滑
+- 中心区域（r<0.35）：完全使用透视域 magnitude，Farneback 质量更优
+- 边缘区域（r>0.65）：完全使用鱼眼域 magnitude，避免透视拉伸
+- 过渡带（0.35<r<0.65）：余弦平滑
 
 **结果（20帧）**：
 
-| 指标 | V1 | V12 | **HF (混合)** | Δ vs V12 |
+| 指标 | V1 | V12 | **HF (最终)** | Δ vs V12 |
 |------|-----|------|------|------|
-| **Mean F1** | 0.1546 | 0.2008 | **0.2040** | **+0.0032** |
-| Precision | 0.1033 | 0.1574 | 0.1610 | +0.0036 |
-| Recall | 0.8432 | 0.3716 | 0.3745 | +0.0029 |
+| **Mean F1** | 0.1546 | 0.2008 | **0.2050** | **+0.0042** |
+| Precision | 0.1033 | 0.1574 | 0.1602 | +0.0028 |
+| Recall | 0.8432 | 0.3716 | 0.3794 | +0.0078 |
 | Frame wins | 4 | 6 | **10** | — |
 
-**关键单帧**：00005 (+0.038), 00053 (+0.016), 00037 (+0.012), 00006 (+0.010)
+**关键单帧**：00005 (+0.035), 00037 (+0.035), 00053 (+0.014), 00006 (+0.009)
 
 ### 4.4 Angular Flow — 角位移
 
@@ -128,8 +128,8 @@ ang_mag(u,v) = arccos(ray(u,v) · ray(u+fx, v+fy))
 | V12 (V2 基线) | 0.2008 | — | 基准 |
 | Route B | 0.1792 | -0.022 | ❌ 边缘问题无法解决 |
 | Residual Flow | 0.2001 | -0.001 | ≈ 持平，无效 |
-| **Hybrid Flow** | **0.2040** | **+0.0032** | ✅ V3 最优 |
-| Angular Flow | 0.1978 | -0.003 | ⏳ 参数待调优 |
+| **Hybrid Flow** | **0.2050** | **+0.0042** | ✅ V3 最优 |
+| Angular Flow | 0.1978 | -0.003 | ⏳ 方向正确，阈值待调 |
 
 ---
 
@@ -200,21 +200,18 @@ fisheyes_v3/
 ├── core/
 │   ├── calib.py              # 向量化 radial_poly 去畸变 + 反投影
 │   ├── angular.py            # 像素光流转角位移 (rad/frame)
-│   ├── ground.py             # 地面平面投影 + 道路 mask
-│   ├── motion.py             # 透视域 V12 运动检测 (Route B)
-│   ├── motion_hybrid.py       # ⭐ Hybrid Flow (V3 最优)
-│   ├── motion_angular.py     # Angular Flow + Hybrid Flow
-│   └── motion_residual.py    # 残差光流 (背景减法)
+│   ├── motion_hybrid.py      # ⭐ Hybrid Flow (V3 最优, F1=0.2050)
+│   ├── motion_angular.py     # Angular Flow (实验性)
+│   └── tracking.py           # IoU 匹配多目标跟踪
 ├── scripts/
-│   ├── eval_hybrid.py         # ⭐ Hybrid Flow vs V12 vs V1
-│   ├── eval_angular.py       # Angular vs Hybrid Flow vs V12
-│   ├── eval_route_b.py       # Route B vs V12
-│   └── eval_residual.py      # Residual Flow vs V12
+│   ├── eval_hybrid.py        # ⭐ 主评估：运动检测 + 目标跟踪
+│   ├── eval_angular.py       # Angular Flow 对比
+│   └── eval_temporal.py      # 时间一致性测试
+├── data/homework2/           # 数据集 (130帧 + 标定 + GT)
 ├── output/evaluation/
-│   ├── hybrid/per_frame/      # ⭐ Hybrid Flow0帧对比图
+│   ├── hybrid/per_frame/     # ⭐ 20帧对比图 (含跟踪框)
 │   ├── angular/per_frame/    # Angular Flow 对比图
-│   ├── route_b/per_frame/    # Route B 对比图
-│   └── residual_flow/        # 残差光流对比图
+│   └── temporal/             # 时间一致性测试
 └── readme.md                 # 本文件
 ```
 
@@ -225,20 +222,14 @@ fisheyes_v3/
 ```bash
 cd fisheyes_v3
 
-# Hybrid Flow 评估（V3 最优方案）
+# 主评估：运动检测 + 目标跟踪 (Hybrid Flow)
 python scripts/eval_hybrid.py
 
-# Angular Flow 评估
+# Angular Flow 对比
 python scripts/eval_angular.py
-
-# Route B 评估
-python scripts/eval_route_b.py
-
-# 残差光流评估
-python scripts/eval_residual.py
 ```
 
-所有脚本自动引用 `fisheyes_v2` 的数据集和 V1/V12 基准代码。
+数据集已内置，无需外部依赖。V1/V12 基准通过 `fisheyes_v2` 代码引用。
 
 ---
 
@@ -248,5 +239,4 @@ python scripts/eval_residual.py
 |--------|------|------|
 | ⭐⭐ | Angular Flow 参数搜索 | 像素阈值→角位移阈值的精确映射 |
 | ⭐⭐ | 径向统计归一化 | 全数据集 expected_mag(r)，替代 5-bin 分档 |
-| ⭐⭐ | 时间一致性 | 130帧来自10个序列，跨帧平滑 |
-| ⭐ | 混合权重+阈值联合调优 | 网格搜索 w(r) 过渡带 + ratio 阈值 |
+| ⭐ | 混合权重网格搜索 | 更深度的 w(r) + ratio 联合调优 |

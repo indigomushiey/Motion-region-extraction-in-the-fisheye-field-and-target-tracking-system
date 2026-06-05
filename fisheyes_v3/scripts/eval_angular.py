@@ -19,7 +19,7 @@ _m = _imp("core/evaluation/metrics.py", "mt")
 _f = _imp("core/motion_detection/frame_difference.py", "fd")
 cm = _m.compute_metrics; dme = _f.detect_motion_seed_expand; dm12 = _f.detect_motion_seed_expand_v12
 
-DATA = V2_ROOT / "data" / "homework2"
+DATA = PROJECT_ROOT / "data" / "homework2"
 GTD = DATA / "motion_annotation" / "GroudTruth"
 CUR = DATA / "rgb_images"; PRV = DATA / "previous_images"
 OUT = PROJECT_ROOT / "output" / "evaluation" / "angular"

@@ -6,15 +6,21 @@ Pipeline:
   3. Reproject mag_p back to fisheye → mag_p_reproj
   4. Hybrid blend: mag = w(r)·mag_p_reproj + (1-w(r))·mag_f
   5. Compute mag_ratio, run V12 seed-expand + CCA on hybrid magnitude
+
+Parameter overrides (set HYBRID_PARAMS dict before calling detect_motion_hybrid):
+  r_start, r_end : blend transition zone [default: 0.4, 0.7]
+  ratio_delta_A..G : ratio_thresh adjustment per p95 bin [default: 0.0]
 """
+
+HYBRID_PARAMS = {}
 
 import cv2
 import numpy as np
 from core.calib import RadialPoly
 from pathlib import Path
 
-CALIB_DIR = (Path(__file__).resolve().parents[2] / "fisheyes_v2" /
-             "fisheye_motion_tracking" / "data" / "homework2" / "calibration_data")
+CALIB_DIR = (Path(__file__).resolve().parents[1] /
+             "data" / "homework2" / "calibration_data")
 
 # ═══════════════════════════════════════════════════════════════════
 # Hybrid blend weight map — precomputed once
@@ -32,8 +38,9 @@ def _get_blend_map(h, w):
     yy, xx = np.ogrid[:h, :w]
     r = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / np.sqrt(cx * cx + cy * cy)  # 0..1
 
-    # Smooth step: 1.0 at r<0.4, 0.0 at r>0.7, cosine ramp between
-    ramp = np.clip((0.7 - r) / 0.3, 0.0, 1.0)
+    rs = HYBRID_PARAMS.get("r_start", 0.35)
+    re = HYBRID_PARAMS.get("r_end", 0.65)
+    ramp = np.clip((re - r) / (re - rs + 1e-6), 0.0, 1.0)
     _BLEND_MAP = (0.5 - 0.5 * np.cos(np.pi * ramp)).astype(np.float32)
     return _BLEND_MAP
 
@@ -112,17 +119,22 @@ def detect_motion_hybrid(prev_gray, curr_gray, morph_ksize=7):
         k = np.ones((morph_ksize, morph_ksize), np.uint8)
         return cv2.morphologyEx(cv2.morphologyEx(mask, cv2.MORPH_OPEN, k), cv2.MORPH_CLOSE, k)
 
-    # ── 5-bin params ────────────────────────────────────────────
+    # ── 5-bin params (with HYBRID_PARAMS ratio overrides) ──────
     if p95_diff > 100:
         st, rt, ed = 22, 1.3, 12; use_abs, ft = True, 2.0
+        rt += HYBRID_PARAMS.get("ratio_delta_A", 0.0)
     elif p95_diff > 70:
         st, rt, ed = 20, 1.5, 10; use_abs, ft = True, 1.5
+        rt += HYBRID_PARAMS.get("ratio_delta_B", 0.0)
     elif p95_diff > 50:
         st, rt, ed = 18, 1.8, 10; use_abs = False
+        rt += HYBRID_PARAMS.get("ratio_delta_C", 0.0)
     elif p95_diff > 30:
         st, rt, ed = 16, 2.0, 10; use_abs = False
+        rt += HYBRID_PARAMS.get("ratio_delta_D", 0.0)
     else:
         st, rt, ed = 14, 2.2, 4; use_abs = False
+        rt += HYBRID_PARAMS.get("ratio_delta_E", 0.0)
 
     if use_abs:
         candidate = ((mag > ft) & (mag_ratio > rt)).astype(np.uint8) * 255
@@ -144,6 +156,27 @@ def detect_motion_hybrid(prev_gray, curr_gray, morph_ksize=7):
 
     k = np.ones((morph_ksize, morph_ksize), np.uint8)
     return cv2.morphologyEx(cv2.morphologyEx(mask, cv2.MORPH_OPEN, k), cv2.MORPH_CLOSE, k)
+
+
+def temporal_smooth(mask, prev_mask, alpha=0.7):
+    """Exponential moving average for temporal consistency.
+
+    Smooths flickering between consecutive frames. Single-frame noise blips
+    that appear and disappear are suppressed.
+    Args:
+        mask: current raw mask (0/255 uint8)
+        prev_mask: smoothed mask from previous frame (float [0,255])
+        alpha: weight for current frame (0.7 = 70% current, 30% history)
+    Returns:
+        smoothed mask (float [0,255]) and binary mask (0/255 uint8)
+    """
+    cur_float = mask.astype(np.float32)
+    if prev_mask is None:
+        smooth = cur_float
+    else:
+        smooth = alpha * cur_float + (1.0 - alpha) * prev_mask.astype(np.float32)
+    binary = (smooth > 127).astype(np.uint8) * 255
+    return smooth, binary
 
 
 def _cca(mask, diff, mag, seed, gdm, gmm):

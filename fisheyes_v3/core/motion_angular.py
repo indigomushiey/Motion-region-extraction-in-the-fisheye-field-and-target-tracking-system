@@ -10,8 +10,8 @@ from core.calib import RadialPoly
 from core.angular import fisheye_angular_mag, perspective_angular_mag
 from pathlib import Path
 
-CALIB_DIR = (Path(__file__).resolve().parents[2] / "fisheyes_v2" /
-             "fisheye_motion_tracking" / "data" / "homework2" / "calibration_data")
+CALIB_DIR = (Path(__file__).resolve().parents[1] /
+             "data" / "homework2" / "calibration_data")
 
 # ── Radial blend weight ──────────────────────────────────────────
 _BLEND_MAP = None
