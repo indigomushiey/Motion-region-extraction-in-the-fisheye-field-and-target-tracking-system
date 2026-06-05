@@ -1,0 +1,9 @@
+# 鱼眼视频运动区域提取与目标跟踪 — 环境依赖
+# 安装: pip install -r requirements.txt
+# 或: conda create --name ipmv --file requirements.txt (需先手动创建环境)
+
+numpy>=1.21.0
+opencv-python>=4.5.0
+scipy>=1.7.0
+matplotlib>=3.3.0
+scikit-learn>=1.0.0

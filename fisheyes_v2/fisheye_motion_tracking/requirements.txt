@@ -1,0 +1,16 @@
+numpy
+opencv-python
+opencv-contrib-python
+matplotlib
+scipy
+scikit-image
+scikit-learn
+pandas
+tqdm
+jupyter
+
+# evaluation / visualization
+seaborn
+
+# optional
+imageio
