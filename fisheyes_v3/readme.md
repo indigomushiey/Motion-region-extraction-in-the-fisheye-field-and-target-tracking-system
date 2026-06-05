@@ -1,14 +1,15 @@
-# 鱼眼运动检测 — Route B 与 Magnitude Blending
+# 鱼眼运动检测 — V3：利用标定参数改进光流质量
 
 ## 一、项目背景
 
 鱼眼相机具有超大视场角，广泛应用于自动驾驶环视、机器人视觉感知、智能交通、全景监控等领域。但鱼眼镜头的非线性畸变导致传统基于透视图像的运动分析方法性能下降。
 
-本项目在 V2 基础上，重点探索**"利用相机标定参数改进运动检测"**的技术路线，包括：
+本项目在 V2 基础上，探索四条利用相机标定参数的技术路线：
 
-- **Route B（去畸变域处理）**：将鱼眼图像映射到透视域后执行运动检测，再反投回鱼眼域评估
-- **Magnitude Blending**：融合透视域和鱼眼域的 Farneback 光流幅值，各取所长
-- **残差光流（Residual Flow）**：利用地面投影分离背景自运动与独立目标运动
+- **Route B（去畸变域处理）**：将鱼眼图像映射到透视域后执行运动检测
+- **Hybrid Flow** ⭐：融合透视域和鱼眼域的 Farneback 光流幅值，V3 最优
+- **Residual Flow（残差光流）**：利用地面投影分离背景自运动
+- **Angular Flow（角位移）**：将像素位移转为物理角位移，消除畸变尺度差异
 
 ---
 
@@ -75,7 +76,7 @@ V2 的 V1~V12 已将参数调优空间基本挖掘完毕。核心瓶颈转向**�
 
 **结论**：Farneback 光流的路面中值仅 0.2~1.0 px/frame，而噪声主体（2~5 px）来自结构性伪影而非自运动，减去微小背景分量对 magnitude 几乎无影响。
 
-### 4.3 ⭐ Magnitude Blending — 混合光流幅值（当前最优）
+### 4.3 ⭐ Hybrid Flow — 混合光流幅值（当前最优）
 
 **思路**：
 
@@ -93,7 +94,7 @@ V2 的 V1~V12 已将参数调优空间基本挖掘完毕。核心瓶颈转向**�
 
 **结果（20帧）**：
 
-| 指标 | V1 | V12 | **BL (混合)** | Δ vs V12 |
+| 指标 | V1 | V12 | **HF (混合)** | Δ vs V12 |
 |------|-----|------|------|------|
 | **Mean F1** | 0.1546 | 0.2008 | **0.2040** | **+0.0032** |
 | Precision | 0.1033 | 0.1574 | 0.1610 | +0.0036 |
@@ -102,38 +103,133 @@ V2 的 V1~V12 已将参数调优空间基本挖掘完毕。核心瓶颈转向**�
 
 **关键单帧**：00005 (+0.038), 00053 (+0.016), 00037 (+0.012), 00006 (+0.010)
 
+### 4.4 Angular Flow — 角位移
+
+**思路**：利用 radial_poly 标定将每个像素的 flow 向量转为物理角位移：
+
+```
+ang_mag(u,v) = arccos(ray(u,v) · ray(u+fx, v+fy))
+```
+
+角位移在中心和边缘有统一的物理含义（rad/frame），消除畸变引起的尺度差异。
+
+**结果（20帧）**：
+
+| 指标 | V12 | HF | AB |
+|------|-----|-----|-----|
+| Mean F1 | 0.2008 | **0.2040** | 0.1978 |
+
+**结论**：方向正确（00000 +0.015, 00053 +0.030），但像素域阈值直接线性缩放到角位移域不够精确，需单独搜索参数。架构已就绪。
+
+### 4.5 四条路线汇总
+
+| 路线 | Mean F1 | vs V12 | 状态 |
+|------|---------|--------|------|
+| V12 (V2 基线) | 0.2008 | — | 基准 |
+| Route B | 0.1792 | -0.022 | ❌ 边缘问题无法解决 |
+| Residual Flow | 0.2001 | -0.001 | ≈ 持平，无效 |
+| **Hybrid Flow** | **0.2040** | **+0.0032** | ✅ V3 最优 |
+| Angular Flow | 0.1978 | -0.003 | ⏳ 参数待调优 |
+
 ---
 
-## 五、项目结构
+## 五、处理全流程（Hybrid Flow）
+
+```
+输入: prev_f, curr_f (鱼眼灰度, 1280×966)
+               │
+  ┌────────────┴────────────┐
+  │  鱼眼域 Farneback        │  透视域 Farneback
+  │  flow_f = FB(p_f, c_f)  │  p_p = undistort(p_f)
+  │  mag_f = ‖flow_f‖       │  c_p = undistort(c_f)
+  │                         │  flow_p = FB(p_p, c_p)
+  │                         │  mag_p = ‖flow_p‖
+  │                         │  mag_pr = reproject(mag_p)
+  └────────────┬────────────┘
+               │
+       mag = w(r)·mag_pr + (1-w)·mag_f
+       w(r): 中心≈1.0, 边缘≈0.0 (余弦过渡)
+               │
+  ┌────────────┴──────────────────────────┐
+  │           V12 Pipeline                 │
+  │                                        │
+  │  diff = |c_f - p_f|, p95 = P95(diff)  │
+  │                                        │
+  │  p95>120 or <20? ──→ V1 fallback      │
+  │  else: 5-bin 自适应参数                │
+  │    seed = diff > seed_th (空间过滤)    │
+  │    cand = mag_ratio > ratio_th         │
+  │    expand = cand (距seed ≤ expand_d)   │
+  │    mask = seed | expand                │
+  │                                        │
+  │  CCA 三级过滤:                         │
+  │    L1: area < 100px → 删除            │
+  │    P0-2: 信号验证 (diff/mag vs 全局)   │
+  │    P0-3: 种子面积比 < 3% → 删除        │
+  │    L2+L3: 形状/密度检查                │
+  │                                        │
+  │  morph open + close (7×7)              │
+  └────────────────────────────────────────┘
+               │
+        输出: mask (0/255 二值)
+```
+
+### 全流程关键参数
+
+| 阶段 | 参数 | 值 | 说明 |
+|------|------|-----|------|
+| 混合 | w(r) 过渡带 | r∈[0.4, 0.7] | 余弦平滑 |
+| 去畸变 | fov_scale | 1.0 | 透视图视场 |
+| 候选 | ratio_thresh | 1.3~2.2 | p95_diff 5档自适应 |
+| 候选 | flow_thresh | 1.5~2.0 | p95>70 时启用 |
+| 种子 | seed_thresh | 14~22 | p95 分档 |
+| 种子 | min_neighbors | 3~4 | 7×7 邻域像素数 |
+| 扩张 | expand_dist | 4~12 | p95 分档 |
+| CCA | min_area | 100px | 最小组件面积 |
+| CCA | sig_diff_ratio | 1.5 | mean_diff/global_diff |
+| CCA | sig_mag_ratio | 1.3 | mean_mag/global_mag |
+| CCA | seed_area_ratio | 0.03 | 组件内种子占比 |
+| 形态学 | morph_ksize | 7 | 开闭运算核大小 |
+
+---
+
+## 六、项目结构
 
 ```
 fisheyes_v3/
 ├── core/
 │   ├── calib.py              # 向量化 radial_poly 去畸变 + 反投影
-│   ├── motion.py             # 透视域运动检测 (Route B 用)
+│   ├── angular.py            # 像素光流转角位移 (rad/frame)
 │   ├── ground.py             # 地面平面投影 + 道路 mask
-│   ├── motion_blend.py       # ⭐ Magnitude Blending (当前最优)
-│   └── motion_residual.py    # 残差光流检测
+│   ├── motion.py             # 透视域 V12 运动检测 (Route B)
+│   ├── motion_hybrid.py       # ⭐ Hybrid Flow (V3 最优)
+│   ├── motion_angular.py     # Angular Flow + Hybrid Flow
+│   └── motion_residual.py    # 残差光流 (背景减法)
 ├── scripts/
-│   ├── eval_route_b.py       # Route B 评估
-│   ├── eval_residual.py      # 残差光流评估
-│   └── eval_blend.py         # ⭐ 混合方案评估
+│   ├── eval_hybrid.py         # ⭐ Hybrid Flow vs V12 vs V1
+│   ├── eval_angular.py       # Angular vs Hybrid Flow vs V12
+│   ├── eval_route_b.py       # Route B vs V12
+│   └── eval_residual.py      # Residual Flow vs V12
 ├── output/evaluation/
-│   ├── route_b/per_frame/    # Route B 20帧对比图
-│   ├── residual_flow/        # 残差光流对比图
-│   └── blend/per_frame/      # ⭐ 混合方案 20帧对比图
+│   ├── hybrid/per_frame/      # ⭐ Hybrid Flow0帧对比图
+│   ├── angular/per_frame/    # Angular Flow 对比图
+│   ├── route_b/per_frame/    # Route B 对比图
+│   └── residual_flow/        # 残差光流对比图
 └── readme.md                 # 本文件
 ```
 
 ---
 
-## 六、运行方式
+## 七、运行方式
 
 ```bash
 cd fisheyes_v3
 
-# Magnitude Blending 评估（当前最优方案）
-python scripts/eval_blend.py
+# Hybrid Flow 评估（V3 最优方案）
+python scripts/eval_hybrid.py
+
+# Angular Flow 评估
+python scripts/eval_angular.py
 
 # Route B 评估
 python scripts/eval_route_b.py
@@ -146,11 +242,11 @@ python scripts/eval_residual.py
 
 ---
 
-## 七、后续方向
+## 八、后续方向
 
 | 优先级 | 方向 | 说明 |
 |--------|------|------|
-| ⭐⭐⭐ | Angular Flow | 利用标定将像素位移转为角位移，物理上统一全图尺度 |
-| ⭐⭐ | 径向统计归一化 | 全数据集建立 expected_mag(r)，替代经验 edge_bonus |
-| ⭐⭐ | 时间一致性 | 连续帧 mask 平滑，消除闪现噪声 |
-| ⭐ | 混合权重优化 | 网格搜索最优 w(r) 过渡带参数 |
+| ⭐⭐ | Angular Flow 参数搜索 | 像素阈值→角位移阈值的精确映射 |
+| ⭐⭐ | 径向统计归一化 | 全数据集 expected_mag(r)，替代 5-bin 分档 |
+| ⭐⭐ | 时间一致性 | 130帧来自10个序列，跨帧平滑 |
+| ⭐ | 混合权重+阈值联合调优 | 网格搜索 w(r) 过渡带 + ratio 阈值 |

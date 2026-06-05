@@ -1,11 +1,11 @@
-"""Magnitude-blended motion detection: perspective mag at center, fisheye at edge.
+"""Hybrid Flow motion detection: perspective mag at center, fisheye at edge.
 
 Pipeline:
   1. Compute Farneback in fisheye → mag_f, mag_ratio_f
   2. Undistort → Farneback in perspective → mag_p
   3. Reproject mag_p back to fisheye → mag_p_reproj
-  4. Radial blend: mag = w(r)·mag_p_reproj + (1-w(r))·mag_f
-  5. Compute mag_ratio, run V12 seed-expand + CCA on blended magnitude
+  4. Hybrid blend: mag = w(r)·mag_p_reproj + (1-w(r))·mag_f
+  5. Compute mag_ratio, run V12 seed-expand + CCA on hybrid magnitude
 """
 
 import cv2
@@ -17,7 +17,7 @@ CALIB_DIR = (Path(__file__).resolve().parents[2] / "fisheyes_v2" /
              "fisheye_motion_tracking" / "data" / "homework2" / "calibration_data")
 
 # ═══════════════════════════════════════════════════════════════════
-# Radial blend weight map — precomputed once
+# Hybrid blend weight map — precomputed once
 # ═══════════════════════════════════════════════════════════════════
 _BLEND_MAP = None  # (h, w) float32
 
@@ -53,8 +53,8 @@ def _get_camera(fov_scale=1.0):
 
 
 # ═══════════════════════════════════════════════════════════════════
-def detect_motion_blend(prev_gray, curr_gray, morph_ksize=7):
-    """Magnitude-blended motion detection.
+def detect_motion_hybrid(prev_gray, curr_gray, morph_ksize=7):
+    """Hybrid Flow motion detection.
 
     Uses perspective-domain Farneback at image center where distortion
     is mild, falls back to fisheye-domain Farneback at edges where
@@ -87,7 +87,7 @@ def detect_motion_blend(prev_gray, curr_gray, morph_ksize=7):
     # ── 3. Reproject perspective mag back to fisheye ────────────
     mag_p_reproj = camera.reproject_to_fisheye(mag_p)
 
-    # ── 4. Radial blend ─────────────────────────────────────────
+    # ── 4. Hybrid blend ─────────────────────────────────────────
     w = _get_blend_map(h, w)
     mag = w * mag_p_reproj + (1.0 - w) * mag_f
 
